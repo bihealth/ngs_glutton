@@ -5,6 +5,8 @@
 
 from setuptools import setup, find_packages
 
+import versioneer
+
 with open('README.rst') as readme_file:
     readme = readme_file.read()
 
@@ -39,6 +41,7 @@ setup(
     test_suite='tests',
     tests_require=test_requirements,
     url='https://github.com/bihealth/ngs_glutton',
-    version='0.0.0',
+    version=versioneer.get_version(),
+    cmdclass=versioneer.get_cmdclass(),
     zip_safe=False,
 )
