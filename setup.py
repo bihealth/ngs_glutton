@@ -29,6 +29,11 @@ setup(
         'Natural Language :: English',
         'Programming Language :: Python :: 3.6',
     ],
+    entry_points={
+        'console_scripts': [
+            'ngs-glutton = ngs_glutton.app:main',
+        ],
+    },
     description="Python library for reading raw sequencing output.",
     install_requires=requirements,
     license="MIT license",

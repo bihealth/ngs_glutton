@@ -1,1 +1,4 @@
-# Pure python for now.
+# For fast manipulation of byte arrays
+numpy >=1.0
+# Serialization of named tuple
+simplejson >=3.8
