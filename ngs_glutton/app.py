@@ -11,9 +11,15 @@ import simplejson
 import sys
 
 from . import io, exceptions
+from . import __version__
 
 #: Path to configuration file.
 PATH_CONFIGFILE = "~/.ngsgluttonrc"
+
+#: Choices for status update
+STATUS_CHOICES = (
+    'initial', 'seq_complete', 'seq_failed', 'demux_started', 'demux_failed',
+    'demux_complete', 'demux_delivered', 'bcl_delivered')
 
 
 class UrlHelper:
@@ -50,6 +56,11 @@ class NgsGluttonApp:
         self._check_args()
         #: Helper for building Flowcelltool URLs
         self.url_helper = UrlHelper(self.args.flowcelltool_url)
+        #: Headers for authentication in POST request
+        self.auth_headers = {
+            'Authorization': 'Token {token}'.format(
+                token=self.args.flowcelltool_auth_token),
+        }
 
     def _setup_logging(self):
         """Setup the logging."""
@@ -92,18 +103,18 @@ class NgsGluttonApp:
                 '--flowcelltool-auth-token must be given if '
                 '--flowcelltool-url is')
 
-    def run(self):
-        """Run the app."""
+    def run_extract(self):
+        """Run the "extract" command."""
         result = {}
         # Read basic flowcell meta data
         result['folder'] = io.parse_run_folder(Path(self.args.run_folder))
         # Sample adapter sequences (called "indexed reads" by Illumina)
         if self.args.extract_adapters:
-            result['adapter_stats'] = io.sample_indexed_reads(
+            result['info_adapters'] = io.sample_indexed_reads(
                 result['folder'], num_reads=self.args.num_reads)
         # Read quality score information
         if self.args.extract_quality_scores:
-            result['quality_scores'] = io.read_quality_info(result['folder'])
+            result['info_quality_scores'] = io.read_quality_info(result['folder'])
         # Output the resulting information
         self._output_result(result)
 
@@ -111,34 +122,19 @@ class NgsGluttonApp:
         """Output the resulting information depending on the configuration."""
         if self.args.flowcelltool_url:
             logging.info('Updating flowcell via Flowcelltool API')
-            auth_headers = {
-                'Authorization': 'Token {token}'.format(
-                    token=self.args.flowcelltool_auth_token),
-            }
-            # Resolve flowcell vendor ID to PK
-            logging.info(
-                'GET %s', self.url_helper.fc_by_vendor_id(
-                    result['folder'].run_info.flowcell))
-            res = requests.get(
-                self.url_helper.fc_by_vendor_id(
-                    result['folder'].run_info.flowcell),
-                headers=auth_headers)
-            if not res.status_code == 200:
-                logging.error('Problem with retrieving PK by vendor ID')
-                logging.error('Server said: %s', res.text)
-                return 1
-            fc = res.json()
-            logging.debug('Flowcell JSON: %s', fc)
+            fc = self._flowcell_by_vendor_id()
             # Update flowcell information through API if configured so.
-            if 'adapter_stats' in result:
+            data = {}
+            if 'info_adapters' in result:
+                data['info_adapters'] = result['info_adapters']
+            if 'info_quality_scores' in  result:
+                data['info_quality_scores'] = result['info_quality_scores']
+            if data:
                 logging.info('POST %s', self.url_helper.fc_update(fc['pk']))
                 res = requests.post(
                     self.url_helper.fc_update(fc['pk']),
-                    data={
-                        'info_adapters': simplejson.dumps(
-                            result['adapter_stats'])
-                    },
-                    headers=auth_headers)
+                    data=data,
+                    headers=self.auth_headers)
                 if not res.status_code == 200:
                     logging.error('Problem with retrieving PK by vendor ID')
                     logging.error('Server said: %s', res.text)
@@ -152,16 +148,52 @@ class NgsGluttonApp:
             logging.info('Writing JSON to stdout')
             simplejson.dump(result, sys.stdout, indent=4)
 
+    def run_update_status(self):
+        """Run the "update-status" command."""
+        if not self.args.flowcelltool_url:
+            raise exceptions.InvalidCommandLineArguments(
+                'The update-status command must be called with a Flowcelltool '
+                'URL.')
+        folder = io.parse_run_folder(Path(self.args.run_folder))
+        fc = self._flowcell_by_vendor_id(folder)
+        res = requests.post(
+            self.url_helper.fc_update(fc['pk']),
+            data={'status': self.args.status},
+            headers=self.auth_headers)
+
+    def _flowcell_by_vendor_id(self, folder):
+        # Resolve flowcell vendor ID to PK
+        logging.info(
+            'GET %s', self.url_helper.fc_by_vendor_id(
+                folder.run_info.flowcell))
+        res = requests.get(
+            self.url_helper.fc_by_vendor_id(
+                folder.run_info.flowcell), headers=self.auth_headers)
+        if not res.status_code == 200:
+            logging.error('Problem with retrieving PK by vendor ID')
+            logging.error('Server said: %s', res.text)
+            raise exceptions.NgsGluttonException(
+                'Could not retrieve flowcell by vendor ID!')
+        fc = res.json()
+        logging.debug('Flowcell JSON: %s', fc)
+        return fc
+
+
 
 def run(args):
     """Program entry point after parsing arguments."""
-    NgsGluttonApp(args).run()
+    app = NgsGluttonApp(args)
+    return args.launch(app)
 
 
 def main(argv=None):
     """Main entry point for parsing command line arguments."""
     parser = argparse.ArgumentParser()
+    subparsers = parser.add_subparsers(help='Select the command to execute')
 
+    parser.add_argument(
+        '--version', action='version', version='%(prog)s {}'.format(
+            __version__))
     parser.add_argument(
         '--verbose', '-v', dest='verbose', default=False, action='store_true',
         help='Enable verbose logging')
@@ -169,15 +201,6 @@ def main(argv=None):
         '--config-file', default=PATH_CONFIGFILE,
         help='Path to INI-style configuration file'
     )
-
-    group = parser.add_argument_group(
-        'Extraction Options')
-    group.add_argument(
-        '--extract-adapters', default=False, action='store_true',
-        help='Extract adapter sequences from raw output directory')
-    group.add_argument(
-        '--extract-quality-scores', default=False, action='store_true',
-        help='Extract quality scores from raw output directory')
 
     group = parser.add_argument_group(
         'Input/Output Options',
@@ -198,16 +221,40 @@ def main(argv=None):
         '--flowcelltool-auth-token',
         help='Authentication token for result posting.')
 
-    group = parser.add_argument_group(
+    # Sub command: ngs-glutton extract
+
+    parser_extract = subparsers.add_parser(
+        'extract', help='Extract information from raw flowcell data.')
+    parser_extract.set_defaults(launch=lambda x: x.run_extract())
+
+    group = parser_extract.add_argument_group(
+        'Extraction Options')
+    group.add_argument(
+        '--extract-adapters', default=False, action='store_true',
+        help='Extract adapter sequences from raw output directory')
+    group.add_argument(
+        '--extract-quality-scores', default=False, action='store_true',
+        help='Extract quality scores from raw output directory')
+
+    group = parser_extract.add_argument_group(
         'Sampling-related Options',
         'Configuration of read sampling')
     group.add_argument(
         '--num-reads', type=int, default=10_000,
         help='Number of reads to read')
 
-    args = parser.parse_args(argv)
 
-    return run(args)
+    # Sub command: ngs-glutton update-status
+
+    parser_update_status = subparsers.add_parser(
+        'update-status', help='Update status of flowcell in Flowcelltool')
+    parser_update_status.set_defaults(launch=lambda x: x.run_update_status())
+
+    parser_update_status.add_argument(
+        '--status', choices=STATUS_CHOICES,
+        help='The new status to set.')
+
+    return run(parser.parse_args(argv))
 
 
 if __name__ == '__main__':
