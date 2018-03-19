@@ -1,4 +1,8 @@
 # For fast manipulation of byte arrays
 numpy >=1.0
-# Serialization of named tuple
+
+# simplejson allows serialization of NamedTuple
 simplejson >=3.8
+
+# HTTP requests for humans
+requests >=2.13.0,<3

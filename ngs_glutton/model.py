@@ -48,6 +48,7 @@ class SampleIndexedReadsStats(typing.NamedTuple):
 
     #: Number of index reads that were read
     num_indexed_reads: int
+    #: Lower limit on count
+    min_read_threshold: float
     #: For each lane (as 'L001', ...), a dict mapping str to count
     per_lane: typing.Dict[str, typing.Dict[str, int]]
-

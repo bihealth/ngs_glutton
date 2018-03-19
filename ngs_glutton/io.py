@@ -3,12 +3,11 @@
 
 import gzip
 import datetime
-import json
 import logging
 from pathlib import Path
-import xml.etree.ElementTree as ET
 import struct
 import typing
+import xml.etree.ElementTree as ET
 
 import numpy as np
 import numpy.ma as ma
@@ -72,6 +71,7 @@ def parse_run_info(xmls: str) -> model.RunInfo:
 
 def parse_run_folder(path: Path) -> model.RunFolder:
     """Read ``RunInfo.xml`` file from the given ``path``."""
+    logging.info('Reading %s/RunInfo.xml', path)
     with open(path / 'RunInfo.xml', 'rt') as xmlf:
         xmls = xmlf.read()
     return model.RunFolder(path, xmls, parse_run_info(xmls))
@@ -166,7 +166,8 @@ class _MiSeqHiSeq2kReadSampler(_BaseIndexedReadSampler):
 
             result[lane.name] = self._sample_for_lane(
                 read_desc, start_cycle, cycle_to_path)
-        return model.SampleIndexedReadsStats(self.num_reads, result)
+        return model.SampleIndexedReadsStats(
+            self.num_reads, self.lower_thresh, result)
 
 
 class _MiniSeqNextSeqIndexedReadSampler(_BaseIndexedReadSampler):
@@ -187,7 +188,8 @@ class _MiniSeqNextSeqIndexedReadSampler(_BaseIndexedReadSampler):
 
             result[lane.name] = self._sample_for_lane(
                 read_desc, start_cycle, cycle_to_lane)
-        return model.SampleIndexedReadsStats(self.num_reads, result)
+        return model.SampleIndexedReadsStats(
+            self.num_reads, self.lower_thresh, result)
 
 
 class _IndexedReadSamplingDriver(object):
@@ -207,6 +209,8 @@ class _IndexedReadSamplingDriver(object):
 
     def run(self) -> [model.SampleIndexedReadsStats]:
         # Guess layout and check
+        logging.info('Sampling adapter sequences from raw output folder %s',
+                     self.run_folder)
         layout = guess_folder_layout(self.run_folder.run_folder_path)
         if layout == FOLDER_LAYOUT_MINISEQ_NEXTSEQ:
             return _MiniSeqNextSeqIndexedReadSampler(
@@ -231,3 +235,8 @@ def sample_indexed_reads(
     """
     return _IndexedReadSamplingDriver(
         run_folder, num_reads, lower_thresh).run()
+
+
+def read_quality_scores(
+        run_folder: model.RunFolder):
+    return None

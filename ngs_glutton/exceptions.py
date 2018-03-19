@@ -8,3 +8,7 @@ class NgsGluttonException(Exception):
 
 class UnknownFlowcellLayoutException(NgsGluttonException):
     """Raised on unknown flowcell layout."""
+
+
+class InvalidCommandLineArguments(NgsGluttonException):
+    """Raised on problems with command line arguments."""
