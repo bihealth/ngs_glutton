@@ -39,6 +39,11 @@ class UrlHelper:
         tpl = '/flowcells/api/v0/flowcell/{pk}/update/'
         return self.base_url + tpl.format(pk=pk)
 
+    def fc_add_message(self, pk):
+        """Return URL to add message" API endpoint."""
+        tpl = '/flowcells/api/v0/flowcell/{pk}/add_message/'
+        return self.base_url + tpl.format(pk=pk)
+
 
 class NgsGluttonApp:
     """The main class of the app."""
@@ -178,6 +183,33 @@ class NgsGluttonApp:
         logging.debug('Flowcell JSON: %s', fc)
         return fc
 
+    def run_add_message(self):
+        """Run the "add-message" command."""
+        if not self.args.flowcelltool_url:
+            raise exceptions.InvalidCommandLineArguments(
+                'The add-message command must be called with a Flowcelltool '
+                'URL.')
+        folder = io.parse_run_folder(Path(self.args.run_folder))
+        fc = self._flowcell_by_vendor_id(folder)
+        logging.info('POST %s', self.url_helper.fc_add_message(fc['pk']))
+        res = requests.post(
+            self.url_helper.fc_add_message(fc['pk']),
+            data={
+                'title': self.args.subject,
+                'body': self.args.body.read() + self.args.message_signature,
+                'mime_type': self.args.mime_type,
+            },
+            files=[
+                ('attachments', open(fname, 'rb'))
+                for fname in self.args.attachments
+            ],
+            headers=self.auth_headers)
+        if not res.status_code == 200:
+            logging.error('Problem with adding message')
+            logging.error('Server said: %s', res.text)
+            raise exceptions.NgsGluttonException(
+                'Could not add message!')
+        logging.debug('Flowcell JSON: %s', fc)
 
 
 def run(args):
@@ -254,7 +286,36 @@ def main(argv=None):
         '--status', choices=STATUS_CHOICES,
         help='The new status to set.')
 
-    return run(parser.parse_args(argv))
+    # Sub command: ngs-glutton add-message
+
+    parser_add_message = subparsers.add_parser(
+        'add-message', help='Add message in Flowcelltool')
+    parser_add_message.set_defaults(launch=lambda x: x.run_add_message())
+
+    parser_add_message.add_argument(
+        '--subject', required=True, help='Set subject of message')
+    parser_add_message.add_argument(
+        '--body', required=True, type=argparse.FileType('rt'),
+        help='Path to text file with body of message')
+    parser_add_message.add_argument(
+        '--mime-type', default='text/plain',
+        choices=('text/plain', 'text/markdown'),
+        help='Mime type of the message')
+    parser_add_message.add_argument(
+        '--message-signature',
+        default=('\n-- \nThis message was added by Flowcelltool client '
+                 'ngs-glutton v{}'.format(__version__)))
+    parser_add_message.add_argument(
+        '--attachment', dest='attachments', default=[], action='append',
+        nargs='+', help='File to attach to message')
+
+    args = parser.parse_args(argv)
+
+    # flatten files if any
+    args.attachments = [
+        item for sublist in args.attachments for item in sublist]
+
+    return run(args)
 
 
 if __name__ == '__main__':
