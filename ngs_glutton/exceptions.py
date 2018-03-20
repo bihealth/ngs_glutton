@@ -12,3 +12,7 @@ class UnknownFlowcellLayoutException(NgsGluttonException):
 
 class InvalidCommandLineArguments(NgsGluttonException):
     """Raised on problems with command line arguments."""
+
+
+class UnknownFlowcellException(NgsGluttonException):
+    """Raised when the flowcell is not known."""

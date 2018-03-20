@@ -13,6 +13,7 @@ import sys
 from . import io, exceptions
 from . import __version__
 
+
 #: Path to configuration file.
 PATH_CONFIGFILE = "~/.ngsgluttonrc"
 
@@ -34,15 +35,15 @@ class UrlHelper:
         tpl = '/flowcells/api/v0/flowcell/by_vendor_id/{vendor_id}/'
         return self.base_url + tpl.format(vendor_id=vendor_id)
 
-    def fc_update(self, pk):
+    def fc_update(self, uuid):
         """Return URL to "update flowcell" API endpoint."""
-        tpl = '/flowcells/api/v0/flowcell/{pk}/update/'
-        return self.base_url + tpl.format(pk=pk)
+        tpl = '/flowcells/api/v0/flowcell/{uuid}/update/'
+        return self.base_url + tpl.format(uuid=uuid)
 
-    def fc_add_message(self, pk):
+    def fc_add_message(self, uuid):
         """Return URL to add message" API endpoint."""
-        tpl = '/flowcells/api/v0/flowcell/{pk}/add_message/'
-        return self.base_url + tpl.format(pk=pk)
+        tpl = '/flowcells/api/v0/flowcell/{uuid}/add_message/'
+        return self.base_url + tpl.format(uuid=uuid)
 
 
 class NgsGluttonApp:
@@ -127,21 +128,28 @@ class NgsGluttonApp:
         """Output the resulting information depending on the configuration."""
         if self.args.flowcelltool_url:
             logging.info('Updating flowcell via Flowcelltool API')
-            fc = self._flowcell_by_vendor_id()
+            fc = self._flowcell_by_vendor_id(result['folder'])
             # Update flowcell information through API if configured so.
             data = {}
             if 'info_adapters' in result:
-                data['info_adapters'] = result['info_adapters']
+                data['info_adapters'] = simplejson.dumps(
+                    result['info_adapters'])
             if 'info_quality_scores' in  result:
-                data['info_quality_scores'] = result['info_quality_scores']
+                data['info_quality_scores'] = simplejson.dumps(
+                    result['info_quality_scores'])
             if data:
-                logging.info('POST %s', self.url_helper.fc_update(fc['pk']))
+                logging.info('POST %s', self.url_helper.fc_update(fc['uuid']))
+                logging.debug('=> data = %s', data)
                 res = requests.post(
-                    self.url_helper.fc_update(fc['pk']),
+                    self.url_helper.fc_update(fc['uuid']),
                     data=data,
                     headers=self.auth_headers)
+                print('XXX')
+                print(res.request.body)
+                print(res.request.headers)
+                print('/XXX')
                 if not res.status_code == 200:
-                    logging.error('Problem with retrieving PK by vendor ID')
+                    logging.error('Problem with retrieving UUID by vendor ID')
                     logging.error('Server said: %s', res.text)
                     return 1
                 logging.debug('Flowcell JSON: %s', res.json())
@@ -162,12 +170,12 @@ class NgsGluttonApp:
         folder = io.parse_run_folder(Path(self.args.run_folder))
         fc = self._flowcell_by_vendor_id(folder)
         res = requests.post(
-            self.url_helper.fc_update(fc['pk']),
+            self.url_helper.fc_update(fc['uuid']),
             data={'status': self.args.status},
             headers=self.auth_headers)
 
     def _flowcell_by_vendor_id(self, folder):
-        # Resolve flowcell vendor ID to PK
+        # Resolve flowcell vendor ID to UUID
         logging.info(
             'GET %s', self.url_helper.fc_by_vendor_id(
                 folder.run_info.flowcell))
@@ -175,7 +183,7 @@ class NgsGluttonApp:
             self.url_helper.fc_by_vendor_id(
                 folder.run_info.flowcell), headers=self.auth_headers)
         if not res.status_code == 200:
-            logging.error('Problem with retrieving PK by vendor ID')
+            logging.error('Problem with retrieving UUID by vendor ID')
             logging.error('Server said: %s', res.text)
             raise exceptions.NgsGluttonException(
                 'Could not retrieve flowcell by vendor ID!')
@@ -191,9 +199,9 @@ class NgsGluttonApp:
                 'URL.')
         folder = io.parse_run_folder(Path(self.args.run_folder))
         fc = self._flowcell_by_vendor_id(folder)
-        logging.info('POST %s', self.url_helper.fc_add_message(fc['pk']))
+        logging.info('POST %s', self.url_helper.fc_add_message(fc['uuid']))
         res = requests.post(
-            self.url_helper.fc_add_message(fc['pk']),
+            self.url_helper.fc_add_message(fc['uuid']),
             data={
                 'title': self.args.subject,
                 'body': self.args.body.read() + self.args.message_signature,
@@ -221,7 +229,9 @@ def run(args):
 def main(argv=None):
     """Main entry point for parsing command line arguments."""
     parser = argparse.ArgumentParser()
-    subparsers = parser.add_subparsers(help='Select the command to execute')
+    subparsers = parser.add_subparsers(
+        dest='cmd', help='Select the command to execute')
+    subparsers.required = True
 
     parser.add_argument(
         '--version', action='version', version='%(prog)s {}'.format(
@@ -272,9 +282,8 @@ def main(argv=None):
         'Sampling-related Options',
         'Configuration of read sampling')
     group.add_argument(
-        '--num-reads', type=int, default=10_000,
+        '--num-reads', type=int, default=10_000_000,
         help='Number of reads to read')
-
 
     # Sub command: ngs-glutton update-status
 
@@ -311,9 +320,10 @@ def main(argv=None):
 
     args = parser.parse_args(argv)
 
-    # flatten files if any
-    args.attachments = [
-        item for sublist in args.attachments for item in sublist]
+    # Flatten attachment list if any
+    if getattr(args, 'attachments', []):
+        args.attachments = [
+            item for sublist in args.attachments for item in sublist]
 
     return run(args)
 

@@ -213,15 +213,17 @@ class _IndexedReadSamplingDriver(object):
                      self.run_folder)
         layout = guess_folder_layout(self.run_folder.run_folder_path)
         if layout == FOLDER_LAYOUT_MINISEQ_NEXTSEQ:
-            return _MiniSeqNextSeqIndexedReadSampler(
+            result = _MiniSeqNextSeqIndexedReadSampler(
                 self.run_folder, self.num_reads, self.lower_thresh).run()
         elif layout == FOLDER_LAYOUT_MISEQ_HISEQ2K:
-            return _MiSeqHiSeq2kReadSampler(
+            result = _MiSeqHiSeq2kReadSampler(
                 self.run_folder, self.num_reads, self.lower_thresh).run()
         else:
             raise exceptions.NgsGluttonException(
                 'Can only handle MiniSeq, NextSeq, MiSeq, HiSeq 2000/2500 '
                 'for now!')
+        logging.debug('Result is %s', result)
+        return result
 
 
 def sample_indexed_reads(
