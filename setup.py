@@ -34,6 +34,7 @@ setup(
             'ngs-glutton = ngs_glutton.app:main',
         ],
     },
+    scripts=['scripts/poll-sequencer-output.sh'],
     description="Python library for reading raw sequencing output.",
     install_requires=requirements,
     license="MIT license",
