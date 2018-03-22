@@ -5,6 +5,7 @@ import gzip
 import datetime
 import logging
 from pathlib import Path
+import simplejson
 import struct
 import typing
 import xml.etree.ElementTree as ET
@@ -65,16 +66,108 @@ def parse_run_info(xmls: str) -> model.RunInfo:
         )
         for read in tag_run.find('Reads').findall('Read')
     ]
+    lane_count = int(tag_run.find('FlowcellLayout').attrib['LaneCount'])
     return model.RunInfo(
-        run_id, run_flowcell, run_date, run_instrument, run_reads)
+        id=run_id, flowcell=run_flowcell, date=run_date,
+        instrument=run_instrument, read_descriptions=run_reads,
+        lane_count=lane_count)
+
+
+def _parse_run_parameters_nextseq(xmls: str):
+    """Parse out information from ``RunParameters.xml``."""
+    # Read the read infos
+    root = ET.fromstring(xmls)
+    read_infos = []
+    read1_cycles = int(root.find('PlannedRead1Cycles').text)
+    number = 1
+    if read1_cycles:
+        read_infos.append(model.ReadDescription(number, read1_cycles, False))
+        number += 1
+    read2_cycles = int(root.find('PlannedRead2Cycles').text)
+    if read2_cycles:
+        read_infos.append(model.ReadDescription(number, read2_cycles, False))
+        number += 1
+    index1_cycles = int(root.find('PlannedIndex1ReadCycles').text)
+    if index1_cycles:
+        read_infos.append(model.ReadDescription(number, index1_cycles, True))
+        number += 1
+    index2_cycles = int(root.find('PlannedIndex2ReadCycles').text)
+    if index2_cycles:
+        read_infos.append(model.ReadDescription(number, index2_cycles, True))
+        number += 1
+    # Read the RTA version
+    rta_version = root.find('RTAVersion').text
+    # Read the run number
+    run_number = int(root.find('RunNumber').text)
+    # The slot, always A
+    slot = 'A'
+    # Read the experiment name
+    if root.find('ExperimentName'):
+        experiment_name = root.find('ExperimentName').text
+    else:
+        experiment_name = ''
+    return model.RunParameters(
+        read_infos, rta_version, run_number, slot, experiment_name)
+
+
+def _parse_run_parameters_miseq(xmls: str):
+    """Parse out information from ``runParameters.xml``."""
+    # Read the read infos
+    root = ET.fromstring(xmls)
+    setup = root.find('Setup')
+    tag_reads = setup.find('Reads')
+    read_infos = [
+        model.ReadDescription(
+            number, int(tag.attrib['NumCycles']),
+            (tag.attrib['IsIndexedRead'] == 'Y'))
+        for number, tag in enumerate(tag_reads.findall('Read'))
+    ]
+    # Read the RTA version
+    rta_version = setup.find('RTAVersion').text
+    # Read the scan number
+    run_number = int(setup.find('ScanNumber').text)
+    # Read the slot
+    if setup.find('FCPosition'):
+        slot = setup.find('FCPosition').text
+    else:
+        slot = 'A'
+    # Read the experiment name
+    experiment_name = setup.find('ExperimentName').text
+    return model.RunParameters(
+        read_infos, rta_version, run_number, slot, experiment_name)
+
+
+def parse_run_parameters(xmls: str, layout: str) -> model.RunParameters:
+    if layout == FOLDER_LAYOUT_MISEQ_HISEQ2K:
+        return _parse_run_parameters_miseq(xmls)
+    elif layout == FOLDER_LAYOUT_MINISEQ_NEXTSEQ:
+        return _parse_run_parameters_nextseq(xmls)
+    else:
+        msg = 'Cannot parse flowcell with layout: {}'.format(layout)
+        raise exceptions.UnknownFlowcellLayoutException(msg)
 
 
 def parse_run_folder(path: Path) -> model.RunFolder:
     """Read ``RunInfo.xml`` file from the given ``path``."""
     logging.info('Reading %s/RunInfo.xml', path)
     with open(path / 'RunInfo.xml', 'rt') as xmlf:
-        xmls = xmlf.read()
-    return model.RunFolder(path, xmls, parse_run_info(xmls))
+        run_info_xml = xmlf.read()
+        run_info = parse_run_info(run_info_xml)
+    layout = guess_folder_layout(path)
+    if layout == FOLDER_LAYOUT_MISEQ_HISEQ2K:
+        logging.info('Reading %s/runParameters.xml', path)
+        with open(path / 'runParameters.xml', 'rt') as xmlf:
+            run_params_xml = xmlf.read()
+    elif layout == FOLDER_LAYOUT_MINISEQ_NEXTSEQ:
+        logging.info('Reading %s/RunParameters.xml', path)
+        with open(path / 'RunParameters.xml', 'rt') as xmlf:
+            run_params_xml = xmlf.read()
+    else:
+        msg = 'Cannot parse flowcell with layout: {}'.format(layout)
+        raise exceptions.UnknownFlowcellLayoutException(msg)
+    run_params = parse_run_parameters(run_params_xml, layout)
+    return model.RunFolder(
+        path, layout, run_info_xml, run_info, run_params_xml, run_params)
 
 
 class _BaseIndexedReadSampler(object):
@@ -242,3 +335,64 @@ def sample_indexed_reads(
 def read_quality_scores(
         run_folder: model.RunFolder):
     return None
+
+
+class JsonEncoder(simplejson.JSONEncoder):
+    """Helper class that knows how to encode ``pathlib.Path``"""
+
+    def default(self, obj):
+        if isinstance(obj, Path):
+            return str(obj)
+        elif isinstance(obj, datetime.date):
+            return obj.isoformat()
+        else:
+            return super().default(obj)
+
+
+def _flow_cell_mode(info_reads: typing.List[model.ReadDescription]):
+    """Return flow cell sequencing mode."""
+    res = ''
+    if info_reads:
+        read_lens = [
+            r.num_cycles for r in info_reads if not r.is_indexed_read]
+        if len(read_lens) == 1:
+            res = '1x{}'.format(read_lens[0])
+        elif len(set(read_lens)) == 1:
+            res = '2x{}'.format(read_lens[0])
+        else:
+            res = ' + '.join(map(str, read_lens))
+        index_lens = [
+            r.num_cycles for r in info_reads if r.is_indexed_read]
+        if index_lens:
+            res += '/'
+            if len(set(index_lens)) == 1:
+                res += '{}x{}'.format(len(index_lens), index_lens[0])
+            else:
+                res += '+'.join(map(str, index_lens))
+    return res or '?x?'
+
+
+def _flowcell_mode_ok(folder: model.RunFolder):
+    if not folder.run_info or not folder.run_parameters:
+        return False
+    return (_flow_cell_mode(folder.run_info.read_descriptions) ==
+            _flow_cell_mode(folder.run_parameters.planned_read_descriptions))
+
+
+def get_sequencing_status(
+        folder: model.RunFolder, current_status='initial') -> str:
+    """Guess the sequencing status from the given run folder.  Take
+    ``current_status`` intro consideration.
+
+    The status is at least 'in_progressing' when a flowcell is constructed
+    through the API.  Once the status is 'closed' or 'failed', it will
+    not be updated any more.
+    """
+    if current_status in ('closed', 'failed'):
+        return current_status
+    elif not _flowcell_mode_ok(folder):
+        return 'failed'
+    elif (folder.run_folder_path / 'RTAComplete.txt').exists():
+        return 'complete'
+    else:
+        return 'in_progress'
