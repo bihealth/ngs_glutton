@@ -147,13 +147,13 @@ def parse_run_parameters(xmls: str, layout: str) -> model.RunParameters:
         raise exceptions.UnknownFlowcellLayoutException(msg)
 
 
-def parse_run_folder(path: Path) -> model.RunFolder:
+def parse_run_folder(path: Path, layout: str=None) -> model.RunFolder:
     """Read ``RunInfo.xml`` file from the given ``path``."""
     logging.info('Reading %s/RunInfo.xml', path)
     with open(path / 'RunInfo.xml', 'rt') as xmlf:
         run_info_xml = xmlf.read()
         run_info = parse_run_info(run_info_xml)
-    layout = guess_folder_layout(path)
+    layout = layout or guess_folder_layout(path)
     if layout == FOLDER_LAYOUT_MISEQ_HISEQ2K:
         logging.info('Reading %s/runParameters.xml', path)
         with open(path / 'runParameters.xml', 'rt') as xmlf:
@@ -304,11 +304,10 @@ class _IndexedReadSamplingDriver(object):
         # Guess layout and check
         logging.info('Sampling adapter sequences from raw output folder %s',
                      self.run_folder)
-        layout = guess_folder_layout(self.run_folder.run_folder_path)
-        if layout == FOLDER_LAYOUT_MINISEQ_NEXTSEQ:
+        if self.run_folder.layout == FOLDER_LAYOUT_MINISEQ_NEXTSEQ:
             result = _MiniSeqNextSeqIndexedReadSampler(
                 self.run_folder, self.num_reads, self.lower_thresh).run()
-        elif layout == FOLDER_LAYOUT_MISEQ_HISEQ2K:
+        elif self.run_folder.layout == FOLDER_LAYOUT_MISEQ_HISEQ2K:
             result = _MiSeqHiSeq2kReadSampler(
                 self.run_folder, self.num_reads, self.lower_thresh).run()
         else:

@@ -46,10 +46,11 @@ class UrlHelper:
         tpl = '/flowcells/api/v0/flowcell/{uuid}/sample_sheet/'
         return self.base_url + tpl.format(uuid=uuid)
 
-    def fc_by_vendor_id(self, vendor_id):
+    def fc_resolve(self, machine_id, run_no, flowcell_id):
         """Return URL to "flowcell by vendor ID" API endpoint."""
-        tpl = '/flowcells/api/v0/flowcell/by_vendor_id/{vendor_id}/'
-        return self.base_url + tpl.format(vendor_id=vendor_id)
+        tpl = '/flowcells/api/v0/flowcell/resolve/{machine_id}/{run_no}/{flowcell_id}/'
+        return self.base_url + tpl.format(
+            machine_id=machine_id, run_no=run_no, flowcell_id=flowcell_id)
 
     def fc_detail(self, uuid):
         """Return URL to "update flowcell" API endpoint."""
@@ -130,14 +131,15 @@ class NgsGluttonAppBase:
                 '--flowcelltool-auth-token must be given if '
                 '--flowcelltool-url is')
 
-    def _flowcell_by_vendor_id(self, folder):
+    def _flowcell_resolve(self, folder):
         # Resolve flowcell vendor ID to UUID
         logging.info(
-            'GET %s', self.url_helper.fc_by_vendor_id(
+            'GET %s', self.url_helper.fc_resolve(
+                folder.run_info.instrument, folder.run_parameters.run_number,
                 folder.run_info.flowcell))
-        res = requests.get(
-            self.url_helper.fc_by_vendor_id(
-                folder.run_info.flowcell), headers=self.auth_headers)
+        res = requests.get(self.url_helper.fc_resolve(
+            folder.run_info.instrument, folder.run_parameters.run_number,
+            folder.run_info.flowcell), headers=self.auth_headers)
         if not res.ok:
             logging.error('Problem with retrieving UUID by vendor ID')
             logging.error('Server said: %s', res.text)
@@ -148,7 +150,8 @@ class NgsGluttonAppBase:
         return fc
 
     def run(self):
-        folder = io.parse_run_folder(Path(self.args.run_folder))
+        folder = io.parse_run_folder(
+            Path(self.args.run_folder), self.args.folder_layout)
         return self._run_impl(folder)
 
     def _run_impl(self, folder: model.RunFolder):
@@ -193,7 +196,7 @@ class NgsGluttonExtractApp(NgsGluttonAppBase):
         """Update flow cell or create if necessary."""
         logging.info('Retrieving flowcell via API...')
         try:
-            fc = self._flowcell_by_vendor_id(result['folder'])
+            fc = self._flowcell_resolve(result['folder'])
             logging.info('=> UUID=%s', fc['uuid'])
         except exceptions.UnknownFlowcellException as e:
             logging.info('=> unknown, creating new')
@@ -278,7 +281,7 @@ class NgsGluttonUpdateStatusApp(NgsGluttonAppBase):
         if not self.args.flowcelltool_url:
             msg = 'This command requires a flowcelltool URL.'
             raise exceptions.InvalidCommandLineArguments(msg)
-        fc = self._flowcell_by_vendor_id(folder)
+        fc = self._flowcell_resolve(folder)
         data = {}
         for cat, val in zip(self.args.status_category, self.args.status_value):
             data['status_{}'.format(cat)] = val
@@ -296,7 +299,7 @@ class NgsGluttonRetrieveStatusApp(NgsGluttonAppBase):
         if not self.args.flowcelltool_url:
             msg = 'This command requires a flowcelltool URL.'
             raise exceptions.InvalidCommandLineArguments(msg)
-        fc = self._flowcell_by_vendor_id(folder)
+        fc = self._flowcell_resolve(folder)
         print(fc['status_%s' % self.args.category])
 
 
@@ -306,7 +309,7 @@ class NgsGluttonRetrieveDeliveryType(NgsGluttonAppBase):
         if not self.args.flowcelltool_url:
             msg = 'This command requires a flowcelltool URL.'
             raise exceptions.InvalidCommandLineArguments(msg)
-        fc = self._flowcell_by_vendor_id(folder)
+        fc = self._flowcell_resolve(folder)
         print(fc['delivery_type'])
 
 
@@ -316,7 +319,7 @@ class NgsGluttonRetrieveLaneCount(NgsGluttonAppBase):
         if not self.args.flowcelltool_url:
             msg = 'This command requires a flowcelltool URL.'
             raise exceptions.InvalidCommandLineArguments(msg)
-        fc = self._flowcell_by_vendor_id(folder)
+        fc = self._flowcell_resolve(folder)
         print(fc['num_lanes'])
 
 
@@ -326,7 +329,7 @@ class NgsGluttonRetrieveSampleSheetApp(NgsGluttonAppBase):
         if not self.args.flowcelltool_url:
             msg = 'This command requires a flowcelltool URL.'
             raise exceptions.InvalidCommandLineArguments(msg)
-        fc = self._flowcell_by_vendor_id(folder)
+        fc = self._flowcell_resolve(folder)
         if not fc['libraries']:
             logging.info(
                 'Flow cell has not libraries, write empty sheet file')
@@ -347,7 +350,7 @@ class NgsGluttonGetStatusApp(NgsGluttonAppBase):
         if not self.args.flowcelltool_url:
             msg = 'This command requires a flowcelltool URL.'
             raise exceptions.InvalidCommandLineArguments(msg)
-        fc = self._flowcell_by_vendor_id(folder)
+        fc = self._flowcell_resolve(folder)
         print(io.get_sequencing_status(folder))
 
 
@@ -358,7 +361,7 @@ class NgsGluttonAddMessageApp(NgsGluttonAppBase):
         if not self.args.flowcelltool_url:
             msg = 'This command requires a flowcelltool URL.'
             raise exceptions.InvalidCommandLineArguments(msg)
-        fc = self._flowcell_by_vendor_id(folder)
+        fc = self._flowcell_resolve(folder)
         logging.info('POST %s', self.url_helper.fc_add_message(fc['uuid']))
         res = requests.post(
             self.url_helper.fc_add_message(fc['uuid']),
@@ -418,6 +421,9 @@ def main(argv=None):
     group.add_argument(
         '--flowcelltool-auth-token',
         help='Authentication token for result posting.')
+    group.add_argument(
+        '--folder-layout', choices=io.FOLDER_LAYOUTS,
+        help='Folder layout')
 
     # Sub command: ngs-glutton get-status
     parser_extract = subparsers.add_parser(
