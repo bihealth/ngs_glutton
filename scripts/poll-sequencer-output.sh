@@ -7,6 +7,8 @@
 # - conda env with ngs-glutton is loaded
 # - conda env cubi_demux is available
 
+. /fast/users/holtgrem_c/miniconda3/etc/profile.d/conda.sh
+
 # Print usage of the script.
 
 usage()
@@ -65,6 +67,7 @@ MAX_DEPTH=3
 MIN_YEAR=$(date +%Y)
 VERBOSE=
 STEP=ALL
+SET=
 
 while [ ${#} -gt 0 ]; do
     OPTERR=0
@@ -147,6 +150,7 @@ get-status()
 {
     path="$1"
 
+    conda activate ngs_glutton
     2>/dev/null \
     ngs-glutton \
         $VERBOSE \
@@ -161,6 +165,7 @@ update-status()
 {
     path="$1"
 
+    conda activate ngs_glutton
     ngs-glutton \
         $VERBOSE \
         --config-file "$CFG_FILE" \
@@ -176,6 +181,7 @@ extract-data()
 {
     path="$1"
 
+    conda activate ngs_glutton
     ngs-glutton \
         $VERBOSE \
         --config-file "$CFG_FILE" \
@@ -183,7 +189,8 @@ extract-data()
         extract \
         --operator "$OPERATOR" \
         --extract-planned-reads \
-        --extract-reads
+        --extract-reads \
+        --extract-adapters
 }
 
 # Retrieve the sample sheet
@@ -193,6 +200,7 @@ retrieve-sample-sheet()
     path="$1"
     work_dir="$2"
 
+    conda activate ngs_glutton
     ngs-glutton \
         $VERBOSE \
         --config-file "$CFG_FILE" \
@@ -207,6 +215,7 @@ retrieve-status()
 {
     path="$1"
 
+    conda activate ngs_glutton
     ngs-glutton \
         $VERBOSE \
         --config-file "$CFG_FILE" \
@@ -221,6 +230,7 @@ retrieve-lane-count()
 {
     path="$1"
 
+    conda activate ngs_glutton
     ngs-glutton \
         $VERBOSE \
         --config-file "$CFG_FILE" \
@@ -234,6 +244,7 @@ retrieve-delivery-type()
 {
     path="$1"
 
+    conda activate ngs_glutton
     ngs-glutton \
         $VERBOSE \
         --config-file "$CFG_FILE" \
@@ -249,13 +260,13 @@ run-demux()
     work_dir="$2"
 
     (
-        source activate cubi_demux
+        conda activate cubi_demux
         cubi-demux \
             --verbose \
             --input-dir "$path" \
             --sample-sheet "$work_dir/sample_sheet.yaml" \
             --output-dir "$work_dir/DEMUX_RESULTS" \
-            --cores 16 \
+            --cores 8 \
             --continue
     )
 }
@@ -267,11 +278,12 @@ post-multiqc-report()
     path="$1"
     report_html="$2"
     token="$3"
-    
+
     report_copy="$(dirname "$report_html")/multiqc_report_${token}.html"
 
     cp "$report_html" "$report_copy"
 
+    conda activate ngs_glutton
     ngs-glutton \
         $VERBOSE \
         --config-file "$CFG_FILE" \
