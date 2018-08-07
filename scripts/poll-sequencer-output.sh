@@ -1,5 +1,8 @@
 #!/usr/bin/env bash
 
+# TODO: Use logger for logging to syslog and/log logstash
+# TODO: make log destination configurable
+
 # Polling of sequencer output directories.
 #
 # Assumptions:
@@ -27,24 +30,36 @@ usage()
     echo "  -s STEP Run step(s)"
     echo "          ALL      : run all steps (default)"
     echo "          REGISTER : register runs only"
+    echo "  -n HOST Host of rsync log server to use"
     echo ""
 }
 
 # Helper for logging
 
+_remote()
+{
+    if [[ $SERVER != "" ]]; then
+        if [[ $PORT != "" ]]; then
+            printf -- "-d -n %s -P %s" $SERVER $PORT
+        else
+            printf -- "-d -n %s" $SERVER
+        fi
+    fi
+}
+
 log_info()
 {
-    logger -t poll-seq-dir -s -p info -- $@
+    logger -t poll-seq-dir -s -p info $(_remote) -- $@
 }
 
 log_warn()
 {
-    logger -t poll-seq-dir -s -p warn -- $@
+    logger -t poll-seq-dir -s -p warn $(_remote) -- $@
 }
 
 log_err()
 {
-    logger -t poll-seq-dir -s -p err -- $@
+    logger -t poll-seq-dir -s -p err $(_remote) -- $@
 }
 
 # Helper for generating status files
@@ -68,11 +83,16 @@ MIN_YEAR=$(date +%Y)
 VERBOSE=
 STEP=ALL
 SET=
+# The remote logging server to use.
+SERVER=
+PORT=
+# Number of reads to read, not configurable yet.
+READS=10000000
 
 while [ ${#} -gt 0 ]; do
     OPTERR=0
     OPTIND=1
-    getopts ":w:vm:y:o:c:s:" arg
+    getopts ":w:vm:y:o:c:s:n:" arg
 
     case "$arg" in
         h)
@@ -100,6 +120,12 @@ while [ ${#} -gt 0 ]; do
         s)
             STEP="$OPTARG"
             >&2 echo "STEP: $STEP"
+            ;;
+        n)
+            SERVER=$(echo $OPTARG | cut -d : -f 1)
+            PORT=$(echo $OPTARG | cut -d : -f 2)
+            >&2 echo "SERVER: $SERVER"
+            >&2 echo "PORT: $PORT"
             ;;
         :)
             >&2 echo "ERROR: -$OPTARG requires an argument"
@@ -138,7 +164,7 @@ prepare()
         log_info "Creating work directory $WORK_DIR"
         mkdir -p $WORK_DIR
     else
-        log_info "Work directory $WORK_DIR already exists!"
+        log_info "Work directory $WORK_DIR already exists, skip creation"
     fi
 }
 
@@ -190,7 +216,8 @@ extract-data()
         --operator "$OPERATOR" \
         --extract-planned-reads \
         --extract-reads \
-        --extract-adapters
+        --extract-adapters \
+        --num-reads 100000000
 }
 
 # Retrieve the sample sheet
@@ -221,7 +248,7 @@ retrieve-status()
         --config-file "$CFG_FILE" \
         -r "$path" \
         retrieve-status \
-        --status-category $2
+        --category $2
 }
 
 # Retrieve lane count
@@ -334,28 +361,58 @@ process-run-dir()
         # update the status and submit a message with the quality report.
 
         # Import the run information until the sequencing is done.
-        if [[ ! -e "$work_dir/STATUS_RTA_DONE" ]]; then
-            log_info "Run not marked as complete yet; updating data..."
-            extract-data "$path"
+        # TODO: use API status here instead of marker file, also post to messages/timeline instead
+        case $(retrieve-status "$path" "sequencing") in
+            initial|ready|in_progress)
+                log_info "Run not marked as complete yet; updating data..."
+                extract-data "$path"
 
-            status=$(get-status $path)
-            [[ $? -eq 0 ]] || { >&2 echo "get-status failed!"; exit 1; }
-            case $status in
-                complete)
-                    status_date 0 >$work_dir/STATUS_RTA_DONE
-                    ;;
-                failed)
-                    status_date 1 >$work_dir/STATUS_RTA_DONE
-                    ;;
-                *)
-                    >&2 echo "foo?! $status"
-                    ;;
-            esac
-        fi
+                status=$(get-status $path)
+                if [[ $? -eq 0 ]]; then
+                    log_err "get-status failed!"
+                    return
+                fi
+
+                case $status in
+                    complete)
+                        status_date 0 >$work_dir/STATUS_RTA_DONE
+                        log_info "Marking status as done in $work_dir"
+                        update-status "$path" sequencing complete
+                        ;;
+                    failed)
+                        status_date 1 >$work_dir/STATUS_RTA_DONE
+                        log_warn "Marking status as failed in $work_dir"
+                        update-status "$path" sequencing failed
+                        ;;
+                    *)
+                        >&2 echo "foo?! $status"
+                        ;;
+                esac
+            ;;
+        esac
+
+        # Get sequencing and conversion status.
+        case $(retrieve-status "$path" "sequencing") in
+            complete|complete_warnings|failed|closed|canceled|skipped)
+                rta_done=1
+            ;;
+            *)
+                rta_done=0
+            ;;
+        esac
+        case $(retrieve-status "$path" "conversion") in
+            complete|complete_warnings|failed|closed|canceled|skipped)
+                conv_done=1
+            ;;
+            *)
+                conv_done=0
+            ;;
+        esac
+        status_demux=$(retrieve-status "$path" "conversion")
 
         # Kick off demultiplexing if sequencing is done.
-        if [[ -e "$work_dir/STATUS_RTA_DONE" ]] && [[ ! -e "$work_dir/STATUS_DEMUX_DONE" ]] && \
-                [[ "$conversion_status" != "skipped" ]] && [[ "$STEP" == "ALL" ]]; then
+        if [[ "$STEP" == "ALL" ]] && [[ $rta_done -eq 1 ]] && [[ $conv_done -ne 1 ]] && \
+                retrieve-delivery-type "$path" | grep seq; then
             log_info "Run done but not demultiplexed; start demultiplexing..."
             update-status "$path" conversion in_progress
 
@@ -393,7 +450,10 @@ process-run-dir()
                 log_info "Posting completed with retval $ret"
 
                 if [[ $ret -eq 0 ]]; then
-                    update-status "$path" conversion complete
+                    # Only mark as complete when creating tarballs is not following.
+                    if [[ ! $(retrieve-delivery-type "$path" | grep bcl) ]]; then
+                        update-status "$path" conversion complete
+                    fi
                 else
                     update-status "$path" conversion failed
                 fi
@@ -401,10 +461,9 @@ process-run-dir()
             fi
         fi
 
-        # Kick off creation of raw data archives/tarballs after sequencing is
-        # done.
-        if [[ -e "$work_dir/STATUS_RTA_DONE" ]] && retrieve-delivery-type "$path" | grep bcl && \
-                [[ ! -e "$work_dir/STATUS_RAW_ARCHIVES_DONE" ]] && [[ "$STEP" == "ALL" ]]; then
+        # Kick off creation of raw data archives/tarballs after sequencing is done.
+        if [[ "$STEP" == "ALL" ]] && [[ $rta_done -eq 1 ]] && [[ $conv_done -ne 1 ]] && \
+                retrieve-delivery-type "$path" | grep bcl; then
             log_info "Creating raw base call archives"
             update-status "$path" conversion in_progress
             mkdir -p "$work_dir/RAW_ARCHIVES"

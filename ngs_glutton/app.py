@@ -426,9 +426,9 @@ def main(argv=None):
         help='Folder layout')
 
     # Sub command: ngs-glutton get-status
-    parser_extract = subparsers.add_parser(
+    parser_get_status = subparsers.add_parser(
         'get-status', help='Get sequencing status.')
-    parser_extract.set_defaults(app_class=NgsGluttonGetStatusApp)
+    parser_get_status.set_defaults(app_class=NgsGluttonGetStatusApp)
 
     # Sub command: ngs-glutton extract
 
@@ -513,7 +513,7 @@ def main(argv=None):
     parser_retrieve_status.set_defaults(
         app_class=NgsGluttonRetrieveStatusApp)
     parser_retrieve_status.add_argument(
-        '--status-category', choices=STATUS_CAT_CHOICES,
+        '--category', choices=STATUS_CAT_CHOICES,
         required=True, help='The status category to retrieve.')
 
     # Sub command: ngs-glutton add-message
