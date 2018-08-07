@@ -288,6 +288,7 @@ run-demux()
 
     (
         conda activate cubi_demux
+        rm -rf "$work_dir/DEMUX_RESULTS"
         cubi-demux \
             --verbose \
             --input-dir "$path" \
@@ -466,7 +467,7 @@ process-run-dir()
                 retrieve-delivery-type "$path" | grep bcl; then
             log_info "Creating raw base call archives"
             update-status "$path" conversion in_progress
-            mkdir -p "$work_dir/RAW_ARCHIVES"
+            rm -rf "$work_dir/RAW_ARCHIVES" && mkdir -p "$work_dir/RAW_ARCHIVES"
 
             ret=0
             for lane in $(eval "echo {1..$(retrieve-lane-count "$path")}"); do
