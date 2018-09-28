@@ -351,7 +351,7 @@ process-run-dir()
 
     work_dir="$WORK_DIR/$year/$run_name"
     log_info "Locking work directory $work_dir"
-    mkdir -p "$work_dir"
+    mkdir -p "$work_dir" "$work_dir/log"
     (
         flock -n 200 || { >&2 echo "Could not lock work directory"; return 1; }
 
@@ -514,7 +514,7 @@ process-run-dir()
             fi
             status_date $ret >"$work_dir/STATUS_RAW_ARCHIVES_DONE"
         fi
-    ) 200>"$work_dir/.flock"
+        ) 200>"$work_dir/.flock" 2> >(tee -a "$work_dir/log/$(date +%y%m%d-%H%M%S).txt" >&2)
     log_info "Released lock again"
 }
 

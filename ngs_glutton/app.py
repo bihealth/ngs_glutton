@@ -299,8 +299,12 @@ class NgsGluttonRetrieveStatusApp(NgsGluttonAppBase):
         if not self.args.flowcelltool_url:
             msg = 'This command requires a flowcelltool URL.'
             raise exceptions.InvalidCommandLineArguments(msg)
-        fc = self._flowcell_resolve(folder)
-        print(fc['status_%s' % self.args.category])
+        try:
+            fc = self._flowcell_resolve(folder)
+            print(fc['status_%s' % self.args.category])
+        except exceptions.UnknownFlowcellException as e:
+            logging.info('=> unknown, creating new')
+            print('initial')
 
 
 class NgsGluttonRetrieveDeliveryType(NgsGluttonAppBase):
